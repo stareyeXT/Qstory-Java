@@ -19,7 +19,7 @@ String helpMessage = "【猫猫看腿助手使用说明】\n"
         + "  - 看看猫猫：可爱猫咪\n"
         + "  - 看看jk：JK制服图片\n"
         + "  - 看看cos：COSPLAY角色扮演图片\n"
-        + "  - 看看二次元：精美二次元壁纸\n"
+        + "  - 看看二次元：精美二次元壁纸（多接口随机）\n"
         + "  - 看看涩图：随机涩图(可开启翻转)\n"
         + "  - 看看涩图[标签]：指定标签的涩图，如'看看涩图白丝'\n"
         + "  - 看看标签[标签]：指定标签的普通图片，如'看看标签白丝'、'看看标签JK'\n"
@@ -40,7 +40,11 @@ java.util.Map apiMap = new java.util.HashMap();
     apiMap.put("看看猫猫", "https://edgecats.net/");
     apiMap.put("看看jk", "https://api.yujn.cn/api/jk.php");
     apiMap.put("看看cos", "https://api.tangdouz.com/hlxmt.php");
-    apiMap.put("看看二次元", "https://api.tangdouz.com/abz/dm.php");
+    // 修改为数组形式，支持多个API接口随机选择
+    apiMap.put("看看二次元", new String[]{
+        "https://api.tangdouz.com/abz/dm.php",
+        "https://api.mossia.top/duckMo?aiType=1&r18Type=0"
+    });
     apiMap.put("看看黄金", "https://api.tangdouz.com/a/zsgold.php");
 }
 
@@ -50,6 +54,16 @@ void initCacheDir() {
     if (!cacheDir.exists()) {
         cacheDir.mkdirs();
     }
+}
+
+// 随机选择二次元API
+String getRandomAnimeApi() {
+    String[] animeApis = {
+        "https://api.tangdouz.com/abz/dm.php",
+        "https://api.mossia.top/duckMo?aiType=1&r18Type=0",
+        "https://random-api.czl.net/pic/ecy"
+    };
+    return animeApis[(int)(Math.random() * animeApis.length)];
 }
 
 // 翻转图片（水平+垂直翻转）
@@ -390,7 +404,7 @@ void handleNSFWRequest(String content, Object msg) {
                     finalImagePath = flippedPath;
                 } else {
                     toast("图片翻转失败，将发送原始图片");
-                }
+}
             }
 
             // 主线程发送图片
@@ -419,7 +433,7 @@ void handleNSFWRequest(String content, Object msg) {
                     } catch (Exception e) {
                         showError(msg, "涩图发送失败: " + e.getMessage());
                     }
-                }
+}
             });
         }
     } catch (Exception e) {
@@ -693,16 +707,60 @@ void onMsg(Object msg) {
         }
 
         // 处理二次元图片
-        if ("https://api.tangdouz.com/abz/dm.php".equals(apiUrl)) {
+        // 修改为支持多个API接口随机选择
+        if (content.equals("看看二次元")) {
+            // 随机选择一个API
+            String selectedApi = getRandomAnimeApi();
+            
             new Thread(new Runnable() {
                 public void run() {
                     try {
-                        String response = httpGet(apiUrl, msg);
+                        // 获取API响应
+                        String response = httpGet(selectedApi, msg);
                         if (response == null || response.isEmpty()) {
                             showError(msg, "二次元图片获取失败");
                             return;
                         }
+
+                        // 根据选择的API处理响应
                         String imageUrl = response.trim();
+                        if (selectedApi.equals("https://api.mossia.top/duckMo?aiType=1&r18Type=0")) {
+                            try {
+                                // 解析JSON响应
+                                org.json.JSONObject json = new org.json.JSONObject(response);
+                                String errCode = json.optString("errCode", "");
+                                if (!"200".equals(errCode)) {
+                                    String message = json.optString("message", "API错误");
+                                    showError(msg, "API错误: " + message);
+                                    return;
+                                }
+
+                                org.json.JSONArray dataArray = json.getJSONArray("data");
+                                if (dataArray.length() == 0) {
+                                    showError(msg, "未找到图片");
+                                    return;
+                                }
+
+                                // 获取第一张图片的URL
+                                org.json.JSONObject firstData = dataArray.getJSONObject(0);
+                                org.json.JSONArray urlsList = firstData.getJSONArray("urlsList");
+                                if (urlsList.length() == 0) {
+                                    showError(msg, "未找到图片URL");
+                                    return;
+                                }
+
+                                org.json.JSONObject urlObj = urlsList.getJSONObject(0);
+                                imageUrl = urlObj.getString("url");
+                            } catch (Exception e) {
+                                showError(msg, "解析API响应失败: " + e.getMessage());
+                                return;
+                            }
+                        } else if (selectedApi.equals("https://random-api.czl.net/pic/ecy")) {
+                            // 对于这个API，响应本身就是图片URL，不需要额外处理
+                            // 直接使用response作为imageUrl即可
+                        }
+
+                        // 处理为图片URL
                         if (!imageUrl.startsWith("http")) {
                             showError(msg, "无效的二次元图片URL");
                             return;
