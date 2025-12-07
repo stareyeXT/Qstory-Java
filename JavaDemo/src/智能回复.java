@@ -1,5 +1,5 @@
 // == QStory 脚本 ==
-// name = 智能回复助手
+// name = 总开关助手
 // type = 1
 // version = 1.0
 // author = Assistant
@@ -18,6 +18,11 @@ String ApiUrl = "https://oiapi.net/api/FeifeiMsgRob?msg="; // API地址
 // 获取特定聊天窗口的概率设置键名
 String getReplyProbabilityKey(String chatKey) {
     return ReplyProbabilityKey + "_" + chatKey;
+}
+
+// 获取特定聊天窗口的随机回复开关键名
+String getRandomReplyEnabledKey(String chatKey) {
+    return RandomReplyEnabledKey + "_" + chatKey;
 }
 
 // 获取特定聊天窗口的浮点数概率设置
@@ -63,10 +68,11 @@ float calculateReplyProbability(MessageData msg, String chatKey) {
         }
     }
     
-    // 检查随机回复总开关是否开启
-    boolean randomReplyEnabled = getBoolean(ConfigName, RandomReplyEnabledKey, true);
+    // 检查特定聊天窗口的随机回复开关是否开启
+    String randomReplyChatKey = getRandomReplyEnabledKey(chatKey);
+    boolean randomReplyEnabled = getBoolean(ConfigName, randomReplyChatKey, true);
     
-    // 如果随机回复总开关关闭，则回复概率为0%
+    // 如果特定聊天窗口的随机回复开关关闭，则回复概率为0%
     if (!randomReplyEnabled) {
         return 0.0f;
     }
@@ -132,10 +138,11 @@ void onMsg(MessageData msg) {
 void onClickFloatingWindow(int type, String uin) {
     // 获取当前聊天的开关状态
     boolean enabled = getBoolean(ConfigName, uin + "_" + EnabledKey, true);
-    addTemporaryItem("智能回复: " + (enabled ? "✔已开启" : "✖已关闭"), "toggleSwitch");
+    addTemporaryItem("总开关: " + (enabled ? "✔已开启" : "✖已关闭"), "toggleSwitch");
     
-    // 获取随机回复总开关状态
-    boolean randomReplyEnabled = getBoolean(ConfigName, RandomReplyEnabledKey, true);
+    // 获取特定聊天窗口的随机回复开关状态
+    String randomReplyChatKey = getRandomReplyEnabledKey(uin);
+    boolean randomReplyEnabled = getBoolean(ConfigName, randomReplyChatKey, true);
     addTemporaryItem("随机回复: " + (randomReplyEnabled ? "✔已开启" : "✖已关闭"), "toggleRandomReplySwitch");
     
     // 获取当前回复概率
@@ -162,7 +169,7 @@ void toggleSwitch(String group, String user, int type) {
     String key = uin + "_" + EnabledKey;
     boolean current = getBoolean(ConfigName, key, true);
     putBoolean(ConfigName, key, !current);
-    toast("智能回复功能已" + (!current ? "开启" : "关闭"));
+    toast("总开关功能已" + (!current ? "开启" : "关闭"));
 }
 
 // 调整回复概率菜单
@@ -235,17 +242,18 @@ void resetProbability(String group, String user, int type) {
 
 // 显示帮助信息
 void showHelp(String group, String user, int type) {
-    String helpMessage = "【智能回复助手使用说明】\n"
+    String helpMessage = "【总开关助手使用说明】\n"
             + "1. 功能默认开启，可在悬浮窗中单独控制每个聊天窗口的开关\n"
-            + "2. 回复概率默认为50%，可通过悬浮窗调节\n"
-            + "3. 支持多种概率调整方式：\n"
+            + "2. 随机回复功能也可针对每个聊天窗口独立控制\n"
+            + "3. 回复概率默认为50%，可通过悬浮窗调节\n"
+            + "4. 支持多种概率调整方式：\n"
             + "   - 增加/减少概率 (±10%)\n"
             + "   - 微调增加/减少概率 (±1%)\n"
             + "   - 精细调整概率 (±0.1%)\n"
             + "   - 自定义概率设置 (0-100%)\n"
-            + "4. 自动过滤以\"看看\"开头的消息\n"
-            + "5. 不会回复自己发送的消息\n"
-            + "6. 通过API获取智能回复内容";
+            + "5. 自动过滤以\"看看\"开头的消息\n"
+            + "6. 不会回复自己发送的消息\n"
+            + "7. 通过API获取回复内容";
     
     if (group != null && !group.isEmpty()) {
         sendMsg(group, "", helpMessage + "<BOT发送>");
@@ -394,7 +402,9 @@ String parseApiSuccessMessage(String response) {
 
 // 随机回复开关切换
 void toggleRandomReplySwitch(String group, String user, int type) {
-    boolean current = getBoolean(ConfigName, RandomReplyEnabledKey, true);
-    putBoolean(ConfigName, RandomReplyEnabledKey, !current);
+    String chatKey = (group != null && !group.isEmpty()) ? group : user;
+    String randomReplyChatKey = getRandomReplyEnabledKey(chatKey);
+    boolean current = getBoolean(ConfigName, randomReplyChatKey, true);
+    putBoolean(ConfigName, randomReplyChatKey, !current);
     toast("随机回复功能已" + (!current ? "开启" : "关闭"));
 }
