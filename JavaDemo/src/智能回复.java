@@ -11,6 +11,7 @@ import java.util.Random;
 // 全局变量
 String ConfigName = "SmartReplySettings";
 String EnabledKey = "Enabled"; // 总开关
+String RandomReplyEnabledKey = "RandomReplyEnabled"; // 随机回复总开关
 String ReplyProbabilityKey = "ReplyProbability"; // 回复概率设置
 String ApiUrl = "https://oiapi.net/api/FeifeiMsgRob?msg="; // API地址
 
@@ -60,6 +61,14 @@ float calculateReplyProbability(MessageData msg, String chatKey) {
                 return 100.0f;
             }
         }
+    }
+    
+    // 检查随机回复总开关是否开启
+    boolean randomReplyEnabled = getBoolean(ConfigName, RandomReplyEnabledKey, true);
+    
+    // 如果随机回复总开关关闭，则回复概率为0%
+    if (!randomReplyEnabled) {
+        return 0.0f;
     }
     
     // 默认情况下，使用配置的回复概率
@@ -125,6 +134,10 @@ void onClickFloatingWindow(int type, String uin) {
     boolean enabled = getBoolean(ConfigName, uin + "_" + EnabledKey, true);
     addTemporaryItem("智能回复: " + (enabled ? "✔已开启" : "✖已关闭"), "toggleSwitch");
     
+    // 获取随机回复总开关状态
+    boolean randomReplyEnabled = getBoolean(ConfigName, RandomReplyEnabledKey, true);
+    addTemporaryItem("随机回复: " + (randomReplyEnabled ? "✔已开启" : "✖已关闭"), "toggleRandomReplySwitch");
+    
     // 获取当前回复概率
     float probability = getFloatReplyProbability(uin);
     addTemporaryItem("回复概率: " + String.format("%.1f", probability) + "%", "adjustProbability");
@@ -136,7 +149,7 @@ void onClickFloatingWindow(int type, String uin) {
     addTemporaryItem("微调减少 (-1%)", "fineDecreaseProbability");
     addTemporaryItem("精细调整 (+0.1%)", "ultraFineIncreaseProbability");
     addTemporaryItem("精细调整 (-0.1%)", "ultraFineDecreaseProbability");
-    addTemporaryItem("自定义概率...", "customProbability");
+    // 删除自定义概率选项
     addTemporaryItem("重置概率 (50%)", "resetProbability");
     
     // 帮助信息
@@ -211,43 +224,6 @@ void ultraFineDecreaseProbability(String group, String user, int type) {
     float newProbability = Math.max(0.0f, current - 0.1f); // 最小0%
     putFloatReplyProbability(chatKey, newProbability);
     toast("回复概率已调整为: " + String.format("%.1f", newProbability) + "%");
-}
-
-// 自定义回复概率
-void customProbability(String group, String user, int type) {
-    String chatKey = (group != null && !group.isEmpty()) ? group : user;
-    float current = getFloatReplyProbability(chatKey);
-    
-    // 显示输入框让用户输入自定义概率
-    showCustomProbabilityDialog(chatKey, current);
-}
-
-// 显示自定义概率输入对话框
-void showCustomProbabilityDialog(String chatKey, float currentProbability) {
-    // 调用平台提供的输入对话框功能
-    showInputDialog("自定义回复概率", "请输入概率值 (0-100)%，当前: " + String.format("%.1f", currentProbability) + "%", String.valueOf(currentProbability), "setCustomProbabilityCallback", chatKey);
-}
-
-// 输入对话框回调方法
-void setCustomProbabilityCallback(String input, String chatKey) {
-    if (input != null && !input.isEmpty()) {
-        setCustomProbability(chatKey, input);
-    }
-}
-
-// 设置自定义回复概率
-void setCustomProbability(String chatKey, String input) {
-    try {
-        float probability = Float.parseFloat(input);
-        if (probability >= 0.0f && probability <= 100.0f) {
-            putFloatReplyProbability(chatKey, probability);
-            toast("回复概率已设置为: " + String.format("%.1f", probability) + "%");
-        } else {
-            toast("概率值必须在0-100之间");
-        }
-    } catch (NumberFormatException e) {
-        toast("请输入有效的数字");
-    }
 }
 
 // 重置回复概率
@@ -414,4 +390,11 @@ String parseApiSuccessMessage(String response) {
         // 出现异常时返回原始内容
         return response;
     }
+}
+
+// 随机回复开关切换
+void toggleRandomReplySwitch(String group, String user, int type) {
+    boolean current = getBoolean(ConfigName, RandomReplyEnabledKey, true);
+    putBoolean(ConfigName, RandomReplyEnabledKey, !current);
+    toast("随机回复功能已" + (!current ? "开启" : "关闭"));
 }
