@@ -135,13 +135,6 @@ String downloadMedia(String apiUrl, Object msg) {
         conn.setRequestMethod("GET");
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(15000);
-        
-        // 添加请求头来避免403错误
-        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
-        conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
-        conn.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3");
-        conn.setRequestProperty("Accept-Encoding", "gzip, deflate");
-        conn.setRequestProperty("Connection", "keep-alive");
 
         // 处理重定向
         int responseCode = conn.getResponseCode();
@@ -225,13 +218,6 @@ String httpGet(String urlStr, Object msg) {
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(15000);
         conn.setInstanceFollowRedirects(true);
-        
-        // 添加请求头来避免403错误
-        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
-        conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
-        conn.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3");
-        conn.setRequestProperty("Accept-Encoding", "gzip, deflate");
-        conn.setRequestProperty("Connection", "keep-alive");
 
         int responseCode = conn.getResponseCode();
         if (responseCode != java.net.HttpURLConnection.HTTP_OK) {
