@@ -7,9 +7,13 @@ addItem("群友点播", "toggleSongRequest");
 
 // 全局变量（仅保留无需场景切换的变量）
 String musicurl = "https://api.jkyai.top/API/qqmusic.php";
-String musicurlkw = "https://oiapi.net/api/Kuwo";
+String musicurlkw = "https://oiapi.net/api/kuwo";
 String songRequestConfig = "群友点播开关";
 String sendType = "";
+// 分页缓存：key=会话标识，value={totalPages:总页数, currentPage:当前页, allSongs:所有歌曲列表, keyword:搜索关键词}
+HashMap<String, Map<String, Object>> songPageCache = new HashMap<>();
+// 每页显示歌曲数量
+int PAGE_SIZE = 10;
 
 // 修复：群友点播开关回调（主线程执行Toast）
 public void toggleSongRequest(String groupUin, String uin, int chatType) {
@@ -46,38 +50,115 @@ public boolean isSongRequestOpen(MessageData msg) {
     }
 }
 
-// ---------------------- 核心修复：直接播放第一首歌曲（移除全局变量依赖） ----------------------
-public void playFirstSong(String songName, String targetGroupUin, String targetQq, int chatType) {
-    sendType = "card"; // 默认卡片发送，可改为"voice"
+// ---------------------- 新增：判断字符串是否为纯数字（用于识别编号回复） ----------------------
+public boolean isNumeric(String str) {
+    if (str == null || str.isEmpty()) return false;
+    for (char c : str.toCharArray()) {
+        if (!Character.isDigit(c)) {
+            return false;
+        }
+    }
+    return true;
+}
 
-    // 子线程请求音乐列表（避免阻塞UI）
+// ---------------------- 新增：获取指定页的歌曲列表 ----------------------
+public List<JSONObject> getPageSongs(List<JSONObject> allSongs, int currentPage) {
+    List<JSONObject> pageSongs = new ArrayList<>();
+    int startIndex = (currentPage - 1) * PAGE_SIZE;
+    int endIndex = Math.min(startIndex + PAGE_SIZE, allSongs.size());
+    if (startIndex >= allSongs.size()) {
+        return pageSongs;
+    }
+    for (int i = startIndex; i < endIndex; i++) {
+        pageSongs.add(allSongs.get(i));
+    }
+    return pageSongs;
+}
+
+// ---------------------- 改造：搜索歌曲并发送列表到聊天（修复私聊乱@） ----------------------
+public void searchAndSendSongList(String songName, String targetGroupUin, String targetQq, int chatType, String sessionKey, String senderUin) {
+    sendType = "card";
+    
     new Thread(new Runnable() {
         public void run() {
             try {
-                String URLsge = musicurlkw + "?msg=" + URLEncoder.encode(songName);
-                String result = httpGet(URLsge, null);
-                // 解析音乐列表
-                List contact = extractSongListFromJsonkw(result);
-                if (contact == null || contact.isEmpty()) {
+                String encodeSongName = URLEncoder.encode(songName, "UTF-8");
+                List<JSONObject> allSongs = new ArrayList<>();
+                int totalPages = 5; // 固定请求1-5页
+                
+                // 循环请求page1到page5
+                for (int page = 1; page <= totalPages; page++) {
+                    String URLsge = musicurlkw + "?msg=" + encodeSongName + "&page=" + page;
+                    String result = httpGet(URLsge, null);
+                    List<JSONObject> pageSongList = extractSongJsonObjectListFromJsonkw(result);
+                    if (pageSongList != null && !pageSongList.isEmpty()) {
+                        allSongs.addAll(pageSongList);
+                    }
+                }
+                
+                // 初始化分页缓存
+                Map<String, Object> pageData = new HashMap<>();
+                pageData.put("totalPages", totalPages);
+                pageData.put("currentPage", 1);
+                pageData.put("allSongs", allSongs);
+                pageData.put("keyword", songName);
+                songPageCache.put(sessionKey, pageData);
+                
+                // 核心修复：仅群聊添加@，私聊不@
+                String atUin = "";
+                if (targetGroupUin != null && !targetGroupUin.isEmpty() && senderUin != null && !senderUin.isEmpty()) {
+                    atUin = "[AtQQ=" + senderUin + "] ";
+                }
+
+                if (allSongs.isEmpty()) {
                     // 无结果时提示
                     getActivity().runOnUiThread(new Runnable() {
                         public void run() {
                             toast("未找到【" + songName + "】相关歌曲");
-                            // 群聊@发送者，私聊直接回复
-                            String atUin = targetGroupUin.isEmpty() ? "" : "[AtQQ=" + targetQq + "] ";
-                            // 提示消息也区分群/私聊发送
                             sendMsg(targetGroupUin, targetGroupUin.isEmpty() ? targetQq : "", atUin + "未找到【" + songName + "】相关歌曲");
                         }
                     });
                     return;
                 }
-                // 核心修复：传递当前场景的目标参数，而非依赖全局变量
-                musicget(songName, 1, targetGroupUin, targetQq, chatType);
-            } catch (Exception e) {
-                log("播放第一首歌曲异常: " + e.toString());
+                
+                // 获取第1页歌曲
+                List<JSONObject> firstPageSongs = getPageSongs(allSongs, 1);
+                // 构建带分页的歌曲列表消息
+                StringBuilder songListMsg = new StringBuilder();
+                songListMsg.append(atUin).append("为你找到【").append(songName).append("】相关歌曲（第1/").append(totalPages).append("页）：\n");
+                for (int i = 0; i < firstPageSongs.size(); i++) {
+                    JSONObject song = firstPageSongs.get(i);
+                    String songNameItem = song.getString("song");
+                    String singerItem = song.getString("singer");
+                    songListMsg.append((i + 1)).append(". ").append(songNameItem).append(" —— ").append(singerItem).append("\n");
+                }
+                // 提示下一页指令
+                if (totalPages > 1) {
+                    songListMsg.append("回复【下一页】查看更多，回复对应编号播放歌曲");
+                } else {
+                    songListMsg.append("请回复对应编号播放歌曲");
+                }
+                
+                // 发送列表到聊天
                 getActivity().runOnUiThread(new Runnable() {
                     public void run() {
-                        toast("点播失败：" + e.getMessage());
+                        sendMsg(targetGroupUin, targetGroupUin.isEmpty() ? targetQq : "", songListMsg.toString());
+                        toast("已发送【" + songName + "】的歌曲列表（第1页），请回复编号播放歌曲");
+                    }
+                });
+                
+            } catch (UnsupportedEncodingException e) {
+                log("关键词编码异常: " + e.toString());
+                getActivity().runOnUiThread(new Runnable() {
+                    public void run() {
+                        toast("搜索失败：关键词编码异常");
+                    }
+                });
+            } catch (Exception e) {
+                log("搜索歌曲列表异常: " + e.toString());
+                getActivity().runOnUiThread(new Runnable() {
+                    public void run() {
+                        toast("搜索失败：" + e.getMessage());
                     }
                 });
             }
@@ -85,32 +166,159 @@ public void playFirstSong(String songName, String targetGroupUin, String targetQ
     }).start();
 }
 
-// ---------------------- 修改：消息监听与指令解析（核心修正群聊参数） ----------------------
+// ---------------------- 新增：处理下一页请求（修复私聊@） ----------------------
+public void handleNextPage(String sessionKey, String targetGroupUin, String targetQq, String senderUin) {
+    if (!songPageCache.containsKey(sessionKey)) {
+        // 区分群/私聊提示
+        String atTip = targetGroupUin != null && !targetGroupUin.isEmpty() ? "[AtQQ=" + senderUin + "] " : "";
+        sendMsg(targetGroupUin, targetQq, atTip + "暂无更多歌曲数据，请先发送「播放歌曲+关键词」搜索");
+        return;
+    }
+    
+    Map<String, Object> pageData = songPageCache.get(sessionKey);
+    int currentPage = (int) pageData.get("currentPage");
+    int totalPages = (int) pageData.get("totalPages");
+    String keyword = (String) pageData.get("keyword");
+    List<JSONObject> allSongs = (List<JSONObject>) pageData.get("allSongs");
+    
+    // 检查是否有下一页
+    if (currentPage >= totalPages) {
+        String atTip = targetGroupUin != null && !targetGroupUin.isEmpty() ? "[AtQQ=" + senderUin + "] " : "";
+        sendMsg(targetGroupUin, targetQq, atTip + "已经是最后一页了，共" + totalPages + "页");
+        return;
+    }
+    
+    // 切换到下一页
+    int nextPage = currentPage + 1;
+    pageData.put("currentPage", nextPage);
+    songPageCache.put(sessionKey, pageData);
+    
+    // 获取下一页歌曲
+    List<JSONObject> nextPageSongs = getPageSongs(allSongs, nextPage);
+    if (nextPageSongs.isEmpty()) {
+        String atTip = targetGroupUin != null && !targetGroupUin.isEmpty() ? "[AtQQ=" + senderUin + "] " : "";
+        sendMsg(targetGroupUin, targetQq, atTip + "第" + nextPage + "页暂无歌曲");
+        return;
+    }
+    
+    // 核心修复：仅群聊添加@前缀
+    String atPrefix = targetGroupUin != null && !targetGroupUin.isEmpty() && senderUin != null ? "[AtQQ=" + senderUin + "] " : "";
+    // 构建下一页消息
+    StringBuilder songListMsg = new StringBuilder();
+    songListMsg.append(atPrefix).append("为你找到【").append(keyword).append("】相关歌曲（第").append(nextPage).append("/").append(totalPages).append("页）：\n");
+    for (int i = 0; i < nextPageSongs.size(); i++) {
+        JSONObject song = nextPageSongs.get(i);
+        String songNameItem = song.getString("song");
+        String singerItem = song.getString("singer");
+        songListMsg.append((i + 1)).append(". ").append(songNameItem).append(" —— ").append(singerItem).append("\n");
+    }
+    
+    // 提示下一页/结束
+    if (nextPage < totalPages) {
+        songListMsg.append("回复【下一页】查看更多，回复对应编号播放歌曲");
+    } else {
+        songListMsg.append("已到最后一页，请回复对应编号播放歌曲");
+    }
+    
+    sendMsg(targetGroupUin, targetQq, songListMsg.toString());
+    toast("已发送【" + keyword + "】的歌曲列表（第" + nextPage + "页）");
+}
+
+// ---------------------- 核心修改：播放指定页码的歌曲（传递完整歌曲信息） ----------------------
+public void playSpecifiedSongByPage(String sessionKey, int songIndex, String targetGroupUin, String targetQq, int chatType, MessageData msg) {
+    if (!songPageCache.containsKey(sessionKey)) {
+        toast("暂无歌曲数据，请先搜索");
+        return;
+    }
+    
+    Map<String, Object> pageData = songPageCache.get(sessionKey);
+    int currentPage = (int) pageData.get("currentPage");
+    List<JSONObject> allSongs = (List<JSONObject>) pageData.get("allSongs");
+    String keyword = (String) pageData.get("keyword");
+    
+    // 计算歌曲在总列表中的真实索引
+    int realIndex = (currentPage - 1) * PAGE_SIZE + (songIndex - 1);
+    if (realIndex < 0 || realIndex >= allSongs.size()) {
+        toast("歌曲编号不存在");
+        // 仅群聊@发送者
+        String atTip = msg.IsGroup ? "[AtQQ=" + msg.UserUin + "] " : "";
+        sendMsg(targetGroupUin, targetQq, atTip + "歌曲编号不存在，请重新输入");
+        return;
+    }
+    
+    // 获取选中的完整歌曲对象（核心：不再只传歌曲名）
+    JSONObject selectedSong = allSongs.get(realIndex);
+    
+    // 调用重载的musicget方法，传递完整歌曲对象
+    musicget(selectedSong, targetGroupUin, targetQq, chatType);
+}
+
+// ---------------------- 修改：消息监听与指令解析（修复私聊@） ----------------------
 void onMsg(MessageData msg) {
     String msgContent = msg.MessageContent.trim();
-    if (isSongRequestOpen(msg) && msgContent.startsWith("播放歌曲")) {
-        String songName = msgContent.substring("播放歌曲".length()).trim();
-        if (songName.isEmpty()) {
-            // 区分群/私聊的回复对象
-            String targetGroupUin = msg.IsGroup ? msg.GroupUin : "";
-            String targetSendUin = msg.IsGroup ? "" : msg.PeerUin; // 群聊回复填群号，私聊填对方QQ
-            String atUin = msg.IsGroup ? "[AtQQ=" + msg.UserUin + "] " : "";
-            sendMsg(targetGroupUin, targetSendUin, atUin + "请输入具体歌曲名，格式：播放歌曲xxx");
-            return;
-        }
+    String sessionKey = msg.IsGroup ? msg.GroupUin : msg.PeerUin;
 
-        // 核心修正：群聊时targetQq置空（第二个参数无意义），私聊时targetQq为对方QQ
-        String targetGroupUin = msg.IsGroup ? msg.GroupUin : "";
-        String targetQq = msg.IsGroup ? "" : msg.PeerUin; // 群聊场景下第二个参数空！！
-        int chatType = msg.IsGroup ? 2 : 1;
-        playFirstSong(songName, targetGroupUin, targetQq, chatType);
+    if (isSongRequestOpen(msg)) {
+        // 场景1：发送「播放歌曲xxx」→ 搜索并发送列表
+        if (msgContent.startsWith("播放歌曲")) {
+            String songName = msgContent.substring("播放歌曲".length()).trim();
+            if (songName.isEmpty()) {
+                String targetGroupUin = msg.IsGroup ? msg.GroupUin : "";
+                String targetSendUin = msg.IsGroup ? "" : msg.PeerUin;
+                // 核心修复：仅群聊@，私聊不@
+                String atUin = msg.IsGroup ? "[AtQQ=" + msg.UserUin + "] " : "";
+                sendMsg(targetGroupUin, targetSendUin, atUin + "请输入具体歌曲名，格式：播放歌曲xxx");
+                return;
+            }
+            
+            String targetGroupUin = msg.IsGroup ? msg.GroupUin : "";
+            String targetQq = msg.IsGroup ? "" : msg.PeerUin;
+            int chatType = msg.IsGroup ? 2 : 1;
+            searchAndSendSongList(songName, targetGroupUin, targetQq, chatType, sessionKey, msg.UserUin);
+        }
+        // 场景2：回复「下一页」→ 切换到下一页
+        else if ("下一页".equals(msgContent)) {
+            String targetGroupUin = msg.IsGroup ? msg.GroupUin : "";
+            String targetQq = msg.IsGroup ? "" : msg.PeerUin;
+            handleNextPage(sessionKey, targetGroupUin, targetQq, msg.UserUin);
+        }
+        // 场景3：回复纯数字 → 播放对应编号的歌曲
+        else if (isNumeric(msgContent)) {
+            int songIndex = Integer.parseInt(msgContent);
+            String targetGroupUin = msg.IsGroup ? msg.GroupUin : "";
+            String targetQq = msg.IsGroup ? "" : msg.PeerUin;
+            int chatType = msg.IsGroup ? 2 : 1;
+            // 传入msg对象用于判断群/私聊
+            playSpecifiedSongByPage(sessionKey, songIndex, targetGroupUin, targetQq, chatType, msg);
+        }
     }
 }
 
-// 以下为原有代码（核心修改musicget/guwastre方法，其余保留）
+// ---------------------- 新增：解析JSONObject类型的歌曲列表 ----------------------
+public static List<JSONObject> extractSongJsonObjectListFromJsonkw(String jsonString) {
+    List<JSONObject> result = new ArrayList<>();
+    try {
+        if (jsonString == null || jsonString.isEmpty()) {
+            return result;
+        }
+        JSONObject jsonObject = new JSONObject(jsonString);
+        if (jsonObject.has("data") && !jsonObject.isNull("data")) {
+            JSONArray dataArray = jsonObject.getJSONArray("data");
+            for (int i = 0; i < dataArray.length(); i++) {
+                JSONObject song = dataArray.getJSONObject(i);
+                result.add(song);
+            }
+        }
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+    return result;
+}
+
+// 以下为原有逻辑 + 核心修改的播放方法
 public void diange(String groupUin, String uin, int chatType) {
     sendType = "card";
-    DialogCarryOut("请输入音乐", groupUin, uin, chatType); // 适配手动搜索的参数传递
+    DialogCarryOut("请输入音乐", groupUin, uin, chatType);
 }
 
 public void ceshikuang(String groupUin, String uin, int chatType) {
@@ -138,67 +346,70 @@ public void gungongerts(String garesc) {
     });
 }
 
-// 保留原有选择歌曲方法（供手动搜索使用）
 public void ceshishuchu(String tupianurl, String targetGroupUin, String targetQq, int chatType) {
     Activity activity = getActivity();
-    String URLsge = musicurlkw + "?msg=" + URLEncoder.encode(tupianurl);
-    gungongliebiao("音乐", tupianurl, new LinearLayCreatedListener() {
-        public void onViewCreated(LinearLayout listContainer,Dialog dialog) {
-            new Thread(new Runnable() {
-                public void run() {
-                    String result = httpGet(URLsge, null);
-                    List contact = extractSongListFromJsonkw(result);
-                    log(contact);
-                    activity.runOnUiThread(new Runnable() {
-                        public void run() {
-                            for (int i = 0; i < contact.size(); i++) {
-                                final int index = i;
-                                TextView item = new TextView(getActivity());
-                                item.setText(contact.get(i));
-                                item.setTextSize(20);
-                                item.setTextColor(Color.DKGRAY);
-                                item.setGravity(Gravity.START);
-                                LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                                        LinearLayout.LayoutParams.MATCH_PARENT,
-                                        LinearLayout.LayoutParams.WRAP_CONTENT
-                                );
-                                item.setLayoutParams(params);
-                                item.setPadding(0, 50, 0, 50);
-                                item.setTag(i + 1);
-                                item.setOnClickListener(new View.OnClickListener() {
-                                    public void onClick(View v) {
-                                        int clickedIndex = (int) v.getTag();
-                                        log("列表项点击: " + clickedIndex+tupianurl);
-                                        dialog.dismiss();
-                                        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
-                                            public void run() {
-                                                try {
-                                                    // 手动搜索也传递当前目标参数
-                                                    musicget(tupianurl, clickedIndex, targetGroupUin, targetQq, chatType);
-                                                } catch (Exception e) {
-                                                    log("打开新对话框错误: " + e.toString());
+    try {
+        String encodeUrl = URLEncoder.encode(tupianurl, "UTF-8");
+        String URLsge = musicurlkw + "?msg=" + encodeUrl;
+        gungongliebiao("音乐", tupianurl, new LinearLayCreatedListener() {
+            public void onViewCreated(LinearLayout listContainer,Dialog dialog) {
+                new Thread(new Runnable() {
+                    public void run() {
+                        String result = httpGet(URLsge, null);
+                        List contact = extractSongListFromJsonkw(result);
+                        log(contact);
+                        activity.runOnUiThread(new Runnable() {
+                            public void run() {
+                                for (int i = 0; i < contact.size(); i++) {
+                                    final int index = i;
+                                    TextView item = new TextView(getActivity());
+                                    item.setText(contact.get(i));
+                                    item.setTextSize(20);
+                                    item.setTextColor(Color.DKGRAY);
+                                    item.setGravity(Gravity.START);
+                                    LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                                            LinearLayout.LayoutParams.MATCH_PARENT,
+                                            LinearLayout.LayoutParams.WRAP_CONTENT
+                                    );
+                                    item.setLayoutParams(params);
+                                    item.setPadding(0, 50, 0, 50);
+                                    item.setTag(i + 1);
+                                    item.setOnClickListener(new View.OnClickListener() {
+                                        public void onClick(View v) {
+                                            int clickedIndex = (int) v.getTag();
+                                            log("列表项点击: " + clickedIndex+tupianurl);
+                                            dialog.dismiss();
+                                            new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                                                public void run() {
+                                                    try {
+                                                        musicget(tupianurl, clickedIndex, targetGroupUin, targetQq, chatType);
+                                                    } catch (Exception e) {
+                                                        log("打开新对话框错误: " + e.toString());
+                                                    }
                                                 }
-                                            }
-                                        }, 100);
-                                    }
-                                });
-                                item.setClickable(true);
-                                item.setFocusable(true);
-                                item.setBackgroundResource(android.R.drawable.list_selector_background);
-                                listContainer.addView(item);
+                                            }, 100);
+                                        }
+                                    });
+                                    item.setClickable(true);
+                                    item.setFocusable(true);
+                                    item.setBackgroundResource(android.R.drawable.list_selector_background);
+                                    listContainer.addView(item);
+                                }
                             }
-                        }
-                    });
-                }
-            }).start();
-        };
-        public void onFailed() {
-            toast("弹窗创建失败");
-        }
-    });
+                        });
+                    }
+                }).start();
+            };
+            public void onFailed() {
+                toast("弹窗创建失败");
+            }
+        });
+    } catch (UnsupportedEncodingException e) {
+        log("手动搜索编码异常: " + e.toString());
+        toast("搜索失败：关键词编码异常");
+    }
 }
 
-// 适配手动搜索的DialogCarryOut（增加参数传递）
 public void DialogCarryOut(String title, String targetGroupUin, String targetQq, int chatType) {
     Activity activity = getActivity();
     if (activity == null) return;
@@ -352,10 +563,11 @@ public String httpGet(String urlPath, String cookie) {
         uc.setRequestMethod("GET");
         uc.setConnectTimeout(20000);
         uc.setReadTimeout(20000);
+        uc.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        uc.setRequestProperty("Accept", "application/json, text/plain, */*");
         if (cookie != null && !cookie.isEmpty()) {
             uc.setRequestProperty("Cookie", cookie);
         }
-        uc.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) MyApp");
         int statusCode = uc.getResponseCode();
         if (statusCode == HttpURLConnection.HTTP_OK) {
             isr = new InputStreamReader(uc.getInputStream(), "UTF-8");
@@ -476,14 +688,19 @@ public static List extractSongListFromJson(String jsonString) {
 public static List extractSongListFromJsonkw(String jsonString) {
     List result = new ArrayList();
     try {
+        if (jsonString == null || jsonString.isEmpty()) {
+            return result;
+        }
         JSONObject jsonObject = new JSONObject(jsonString);
-        JSONArray dataArray = jsonObject.getJSONArray("data");
-        for (int i = 0; i < dataArray.length(); i++) {
-            JSONObject song = dataArray.getJSONObject(i);
-            String songName = song.getString("song");
-            String singer = song.getString("singer");
-            String formattedString = (i + 1) + "." + songName + "——" + singer;
-            result.add(formattedString);
+        if (jsonObject.has("data") && !jsonObject.isNull("data")) {
+            JSONArray dataArray = jsonObject.getJSONArray("data");
+            for (int i = 0; i < dataArray.length(); i++) {
+                JSONObject song = dataArray.getJSONObject(i);
+                String songName = song.getString("song");
+                String singer = song.getString("singer");
+                String formattedString = (i + 1) + "." + songName + "——" + singer;
+                result.add(formattedString);
+            }
         }
     } catch (Exception e) {
         e.printStackTrace();
@@ -640,17 +857,49 @@ public void gungong(String garesc, List methodList) {
     }
 }
 
-// ---------------------- 核心修复：musicget方法（新增目标参数） ----------------------
+// ---------------------- 新增：重载musicget方法（接收完整歌曲对象，精准播放） ----------------------
+public void musicget(JSONObject songObj, String targetGroupUin, String targetQq, int chatType) {
+    Activity activity = getActivity();
+    try {
+        // 从选中的歌曲对象中获取精准的歌曲名和歌手
+        String songName = songObj.getString("song");
+        String singer = songObj.getString("singer");
+        // 拼接精准的搜索关键词（歌曲名+歌手），避免匹配错误
+        String preciseKeyword = songName + " " + singer;
+        String encodeName = URLEncoder.encode(preciseKeyword, "UTF-8");
+        // 强制指定取第1条结果（因为是精准匹配）
+        String muaicul = musicurlkw + "?msg=" + encodeName + "&n=1" + "&br=1";
+        guwastre(muaicul, targetGroupUin, targetQq, songName, singer);
+    } catch (UnsupportedEncodingException e) {
+        log("播放编码异常: " + e.toString());
+        activity.runOnUiThread(new Runnable() {
+            public void run() {
+                toast("播放失败：关键词编码异常");
+            }
+        });
+    }
+}
+
+// ---------------------- 保留原有musicget方法（兼容旧逻辑） ----------------------
 public void musicget(String name, int swhich, String targetGroupUin, String targetQq, int chatType) {
     Activity activity = getActivity();
     String str1 = String.valueOf(swhich);
-    String muaicul = musicurlkw + "?msg=" + URLEncoder.encode(name) + "&n=" + str1 + "&br=5";
-    // 传递当前场景的目标参数给guwastre
-    guwastre(muaicul, targetGroupUin, targetQq);
+    try {
+        String encodeName = URLEncoder.encode(name, "UTF-8");
+        String muaicul = musicurlkw + "?msg=" + encodeName + "&n=" + str1 + "&br=1";
+        guwastre(muaicul, targetGroupUin, targetQq, name, "");
+    } catch (UnsupportedEncodingException e) {
+        log("播放编码异常: " + e.toString());
+        activity.runOnUiThread(new Runnable() {
+            public void run() {
+                toast("播放失败：关键词编码异常");
+            }
+        });
+    }
 }
 
-// ---------------------- 核心修复：guwastre方法（确保群聊直接发群里） ----------------------
-public void guwastre(String garesc, String targetGroupUin, String targetQq) {
+// ---------------------- 修改：guwastre方法（接收精准的歌曲名和歌手，优化提示） ----------------------
+public void guwastre(String garesc, String targetGroupUin, String targetQq, String songName, String singer) {
     Activity activity = getActivity();
     new Thread(new Runnable() {
         public void run() {
@@ -658,18 +907,19 @@ public void guwastre(String garesc, String targetGroupUin, String targetQq) {
                 String result = httpGet(garesc, null);
                 JSONObject rootObject = new JSONObject(result);
                 JSONObject dataObject = rootObject.getJSONObject("data");
-                String songName = dataObject.getString("album");
-                String songSinger = dataObject.getString("singer");
+                // 优先使用传入的精准歌曲名/歌手，避免接口返回不一致
+                String finalSongName = songName.isEmpty() ? dataObject.getString("song") : songName;
+                String finalSinger = singer.isEmpty() ? dataObject.getString("singer") : singer;
                 String cover = dataObject.getString("picture");
                 String flacUrl = dataObject.getString("url");
                 String link = flacUrl;
-
+                
                 if ("card".equals(sendType)) {
                     String url = "https://oiapi.net/api/QQMusicJSONArk";
                     JSONObject requestBody = new JSONObject();
                     requestBody.put("url", flacUrl);
-                    requestBody.put("song", songName);
-                    requestBody.put("singer", songSinger);
+                    requestBody.put("song", finalSongName);
+                    requestBody.put("singer", finalSinger);
                     requestBody.put("cover", cover);
                     requestBody.put("jump", link);
                     requestBody.put("format", "kuwo");
@@ -679,19 +929,17 @@ public void guwastre(String garesc, String targetGroupUin, String targetQq) {
                     JSONObject carddata = new JSONObject(card);
                     JSONObject dataObj = carddata.getJSONObject("data");
                     String dataString = dataObj.toString();
-
+                    
                     activity.runOnUiThread(new Runnable() {
                         public void run() {
-                            // 最终发送：群聊填群号，第二个参数空；私聊填空，第二个参数填对方QQ
                             sendCard(targetGroupUin, targetQq, dataString);
-                            toast("已在" + (targetGroupUin.isEmpty() ? "私聊" : "群聊【" + targetGroupUin + "】") + "点播：" + songName + " - " + songSinger);
+                            toast("已在" + (targetGroupUin.isEmpty() ? "私聊" : "群聊【" + targetGroupUin + "】") + "点播：" + finalSongName + " - " + finalSinger);
                         }
                     });
                 } else if ("voice".equals(sendType)) {
                     Thread.sleep(200);
-                    // 最终发送：群聊填群号，第二个参数空；私聊填空，第二个参数填对方QQ
                     sendVoice(targetGroupUin, targetQq, flacUrl);
-                    toast("已在" + (targetGroupUin.isEmpty() ? "私聊" : "群聊【" + targetGroupUin + "】") + "点播（语音）：" + songName + " - " + songSinger);
+                    toast("已在" + (targetGroupUin.isEmpty() ? "私聊" : "群聊【" + targetGroupUin + "】") + "点播（语音）：" + finalSongName + " - " + finalSinger);
                 }
             } catch (Exception e) {
                 log("音乐发送异常: " + e.toString());
@@ -857,7 +1105,6 @@ public void inputCard(String groupUin, String uin, int chatType) {
                                 String dataString = dataObj.toString();
                                 activity.runOnUiThread(new Runnable() {
                                     public void run() {
-                                        // 手动构建卡片也区分群/私聊发送
                                         sendCard(groupUin, uin, dataString);
                                     }
                                 });
