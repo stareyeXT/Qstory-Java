@@ -14,6 +14,58 @@ String EnabledKey = "Enabled"; // 总开关
 String ReplyProbabilityKey = "ReplyProbability"; // 回复概率设置
 String ApiUrl = "https://oiapi.net/api/FeifeiMsgRob?msg="; // API地址
 
+// 获取特定聊天窗口的概率设置键名
+String getReplyProbabilityKey(String chatKey) {
+    return ReplyProbabilityKey + "_" + chatKey;
+}
+
+// 获取特定聊天窗口的浮点数概率设置
+float getFloatReplyProbability(String chatKey) {
+    // 为了兼容性，先尝试获取浮点数配置，如果不存在则使用整数配置
+    String floatKey = getReplyProbabilityKey(chatKey) + "_float";
+    String intKey = getReplyProbabilityKey(chatKey);
+    
+    // 尝试获取浮点数配置
+    String floatConfig = getString(ConfigName, floatKey, "");
+    if (!floatConfig.isEmpty()) {
+        try {
+            return Float.parseFloat(floatConfig);
+        } catch (NumberFormatException e) {
+            // 如果解析失败，继续使用整数配置
+        }
+    }
+    
+    // 如果没有浮点数配置，使用原来的整数配置
+    int intConfig = getInt(ConfigName, intKey, 50);
+    return (float) intConfig;
+}
+
+// 设置特定聊天窗口的浮点数概率
+void putFloatReplyProbability(String chatKey, float probability) {
+    String floatKey = getReplyProbabilityKey(chatKey) + "_float";
+    putString(ConfigName, floatKey, String.valueOf(probability));
+}
+
+// 计算回复概率，根据特殊规则调整
+float calculateReplyProbability(MessageData msg, String chatKey) {
+    // 检查是否是图片消息，如果是则回复概率为0%
+    if (msg.PicList != null && msg.PicList.length > 0) {
+        return 0.0f;
+    }
+    
+    // 检查是否被@，如果是则回复概率为100%
+    if (msg.mAtList != null) {
+        for (String atUin : msg.mAtList) {
+            if (atUin.equals(msg.UserUin)) {
+                return 100.0f;
+            }
+        }
+    }
+    
+    // 默认情况下，使用配置的回复概率
+    return getFloatReplyProbability(chatKey);
+}
+
 // 随机数生成器
 java.util.Random random = new java.util.Random();
 
@@ -41,24 +93,25 @@ void onMsg(MessageData msg) {
         return;
     }
     
-    // 获取回复概率设置，默认为50%
-    int replyProbability = getInt(ConfigName, ReplyProbabilityKey, 50);
+    // 计算回复概率
+    float replyProbability = calculateReplyProbability(msg, chatKey);
     
-    // 使用随机函数决定是否回复
-    if (random.nextInt(100) < replyProbability) {
+    // 使用随机函数决定是否回复（支持小数概率）
+    if (random.nextFloat() * 100 < replyProbability) {
         try {
             // 调用API获取回复内容，注意不要把自己发送的消息传给API
             String encodedContent = java.net.URLEncoder.encode(content, "UTF-8");
             String apiUrl = ApiUrl + encodedContent;
             String response = httpGet(apiUrl, msg);
             
-            // 发送回复消息
+            // 发送回复消息，添加<BOT发送>标记
+            String botResponse = response + "<BOT发送>";
             if (msg.IsGroup) {
                 // 群聊回复
-                sendMsg(msg.GroupUin, "", response);
+                sendMsg(msg.GroupUin, "", botResponse);
             } else {
                 // 私聊回复
-                sendMsg("", msg.PeerUin, response);
+                sendMsg("", msg.PeerUin, botResponse);
             }
         } catch (Exception e) {
             showError(msg, "回复消息失败: " + e.getMessage());
@@ -73,12 +126,17 @@ void onClickFloatingWindow(int type, String uin) {
     addTemporaryItem("智能回复: " + (enabled ? "✔已开启" : "✖已关闭"), "toggleSwitch");
     
     // 获取当前回复概率
-    int probability = getInt(ConfigName, ReplyProbabilityKey, 50);
-    addTemporaryItem("回复概率: " + probability + "%", "adjustProbability");
+    float probability = getFloatReplyProbability(uin);
+    addTemporaryItem("回复概率: " + String.format("%.1f", probability) + "%", "adjustProbability");
     
     // 添加概率调节选项
     addTemporaryItem("增加概率 (+10%)", "increaseProbability");
     addTemporaryItem("减少概率 (-10%)", "decreaseProbability");
+    addTemporaryItem("微调增加 (+1%)", "fineIncreaseProbability");
+    addTemporaryItem("微调减少 (-1%)", "fineDecreaseProbability");
+    addTemporaryItem("精细调整 (+0.1%)", "ultraFineIncreaseProbability");
+    addTemporaryItem("精细调整 (-0.1%)", "ultraFineDecreaseProbability");
+    addTemporaryItem("自定义概率...", "customProbability");
     addTemporaryItem("重置概率 (50%)", "resetProbability");
     
     // 帮助信息
@@ -96,30 +154,107 @@ void toggleSwitch(String group, String user, int type) {
 
 // 调整回复概率菜单
 void adjustProbability(String group, String user, int type) {
-    int probability = getInt(ConfigName, ReplyProbabilityKey, 50);
-    toast("当前回复概率: " + probability + "%");
+    String chatKey = (group != null && !group.isEmpty()) ? group : user;
+    float probability = getFloatReplyProbability(chatKey);
+    toast("当前回复概率: " + String.format("%.1f", probability) + "%");
 }
 
 // 增加回复概率
 void increaseProbability(String group, String user, int type) {
-    int current = getInt(ConfigName, ReplyProbabilityKey, 50);
-    int newProbability = Math.min(100, current + 10); // 最大100%
-    putInt(ConfigName, ReplyProbabilityKey, newProbability);
-    toast("回复概率已调整为: " + newProbability + "%");
+    String chatKey = (group != null && !group.isEmpty()) ? group : user;
+    float current = getFloatReplyProbability(chatKey);
+    float newProbability = Math.min(100.0f, current + 10.0f); // 最大100%
+    putFloatReplyProbability(chatKey, newProbability);
+    toast("回复概率已调整为: " + String.format("%.1f", newProbability) + "%");
 }
 
 // 减少回复概率
 void decreaseProbability(String group, String user, int type) {
-    int current = getInt(ConfigName, ReplyProbabilityKey, 50);
-    int newProbability = Math.max(0, current - 10); // 最小0%
-    putInt(ConfigName, ReplyProbabilityKey, newProbability);
-    toast("回复概率已调整为: " + newProbability + "%");
+    String chatKey = (group != null && !group.isEmpty()) ? group : user;
+    float current = getFloatReplyProbability(chatKey);
+    float newProbability = Math.max(0.0f, current - 10.0f); // 最小0%
+    putFloatReplyProbability(chatKey, newProbability);
+    toast("回复概率已调整为: " + String.format("%.1f", newProbability) + "%");
+}
+
+// 微调增加回复概率 (+1%)
+void fineIncreaseProbability(String group, String user, int type) {
+    String chatKey = (group != null && !group.isEmpty()) ? group : user;
+    float current = getFloatReplyProbability(chatKey);
+    float newProbability = Math.min(100.0f, current + 1.0f); // 最大100%
+    putFloatReplyProbability(chatKey, newProbability);
+    toast("回复概率已调整为: " + String.format("%.1f", newProbability) + "%");
+}
+
+// 微调减少回复概率 (-1%)
+void fineDecreaseProbability(String group, String user, int type) {
+    String chatKey = (group != null && !group.isEmpty()) ? group : user;
+    float current = getFloatReplyProbability(chatKey);
+    float newProbability = Math.max(0.0f, current - 1.0f); // 最小0%
+    putFloatReplyProbability(chatKey, newProbability);
+    toast("回复概率已调整为: " + String.format("%.1f", newProbability) + "%");
+}
+
+// 超精细增加回复概率 (+0.1%)
+void ultraFineIncreaseProbability(String group, String user, int type) {
+    String chatKey = (group != null && !group.isEmpty()) ? group : user;
+    float current = getFloatReplyProbability(chatKey);
+    float newProbability = Math.min(100.0f, current + 0.1f); // 最大100%
+    putFloatReplyProbability(chatKey, newProbability);
+    toast("回复概率已调整为: " + String.format("%.1f", newProbability) + "%");
+}
+
+// 超精细减少回复概率 (-0.1%)
+void ultraFineDecreaseProbability(String group, String user, int type) {
+    String chatKey = (group != null && !group.isEmpty()) ? group : user;
+    float current = getFloatReplyProbability(chatKey);
+    float newProbability = Math.max(0.0f, current - 0.1f); // 最小0%
+    putFloatReplyProbability(chatKey, newProbability);
+    toast("回复概率已调整为: " + String.format("%.1f", newProbability) + "%");
+}
+
+// 自定义回复概率
+void customProbability(String group, String user, int type) {
+    String chatKey = (group != null && !group.isEmpty()) ? group : user;
+    float current = getFloatReplyProbability(chatKey);
+    
+    // 显示输入框让用户输入自定义概率
+    showCustomProbabilityDialog(chatKey, current);
+}
+
+// 显示自定义概率输入对话框
+void showCustomProbabilityDialog(String chatKey, float currentProbability) {
+    // 调用平台提供的输入对话框功能
+    showInputDialog("自定义回复概率", "请输入概率值 (0-100)%，当前: " + String.format("%.1f", currentProbability) + "%", String.valueOf(currentProbability), "setCustomProbabilityCallback", chatKey);
+}
+
+// 输入对话框回调方法
+void setCustomProbabilityCallback(String input, String chatKey) {
+    if (input != null && !input.isEmpty()) {
+        setCustomProbability(chatKey, input);
+    }
+}
+
+// 设置自定义回复概率
+void setCustomProbability(String chatKey, String input) {
+    try {
+        float probability = Float.parseFloat(input);
+        if (probability >= 0.0f && probability <= 100.0f) {
+            putFloatReplyProbability(chatKey, probability);
+            toast("回复概率已设置为: " + String.format("%.1f", probability) + "%");
+        } else {
+            toast("概率值必须在0-100之间");
+        }
+    } catch (NumberFormatException e) {
+        toast("请输入有效的数字");
+    }
 }
 
 // 重置回复概率
 void resetProbability(String group, String user, int type) {
-    putInt(ConfigName, ReplyProbabilityKey, 50);
-    toast("回复概率已重置为: 50%");
+    String chatKey = (group != null && !group.isEmpty()) ? group : user;
+    putFloatReplyProbability(chatKey, 50.0f);
+    toast("回复概率已重置为: 50.0%");
 }
 
 // 显示帮助信息
@@ -127,14 +262,19 @@ void showHelp(String group, String user, int type) {
     String helpMessage = "【智能回复助手使用说明】\n"
             + "1. 功能默认开启，可在悬浮窗中单独控制每个聊天窗口的开关\n"
             + "2. 回复概率默认为50%，可通过悬浮窗调节\n"
-            + "3. 自动过滤以\"看看\"开头的消息\n"
-            + "4. 不会回复自己发送的消息\n"
-            + "5. 通过API获取智能回复内容";
+            + "3. 支持多种概率调整方式：\n"
+            + "   - 增加/减少概率 (±10%)\n"
+            + "   - 微调增加/减少概率 (±1%)\n"
+            + "   - 精细调整概率 (±0.1%)\n"
+            + "   - 自定义概率设置 (0-100%)\n"
+            + "4. 自动过滤以\"看看\"开头的消息\n"
+            + "5. 不会回复自己发送的消息\n"
+            + "6. 通过API获取智能回复内容";
     
     if (group != null && !group.isEmpty()) {
-        sendMsg(group, "", helpMessage);
+        sendMsg(group, "", helpMessage + "<BOT发送>");
     } else {
-        sendMsg("", user, helpMessage);
+        sendMsg("", user, helpMessage + "<BOT发送>");
     }
 }
 
@@ -144,9 +284,9 @@ void showError(MessageData msg, String errorMsg) {
 
     try {
         if (msg.IsGroup) {
-            sendMsg(msg.GroupUin, "", "【系统提示】" + errorMsg);
+            sendMsg(msg.GroupUin, "", "【系统提示】" + errorMsg + "<BOT发送>");
         } else {
-            sendMsg("", msg.PeerUin, "【系统提示】" + errorMsg);
+            sendMsg("", msg.PeerUin, "【系统提示】" + errorMsg + "<BOT发送>");
         }
     } catch (Exception e) {
         // 发送消息失败时仅保证toast显示
