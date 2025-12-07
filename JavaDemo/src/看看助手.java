@@ -56,14 +56,18 @@ void initCacheDir() {
     }
 }
 
-// 随机选择二次元API
+// 随机选择二次元API（使用随机选择而非固定顺序）
 String getRandomAnimeApi() {
     String[] animeApis = {
         "https://api.tangdouz.com/abz/dm.php",
         "https://api.mossia.top/duckMo?aiType=1&r18Type=0",
         "https://random-api.czl.net/pic/ecy"
     };
-    return animeApis[(int)(Math.random() * animeApis.length)];
+    
+    // 使用Random类实现随机选择
+    java.util.Random random = new java.util.Random();
+    int randomIndex = random.nextInt(animeApis.length);
+    return animeApis[randomIndex];
 }
 
 // 翻转图片（水平+垂直翻转）
@@ -255,7 +259,7 @@ void handleCosApiResponse(String response, Object msg) {
             return;
         }
 
-        // 分割字符串获取图片URL
+// 分割字符串获取图片URL
         String[] parts = response.split("±");
         java.util.List<String> imageUrls = new java.util.ArrayList<>();
         for (String part : parts) {
@@ -333,21 +337,39 @@ void handleNSFWRequest(String content, Object msg) {
 
         if (content.startsWith("看看涩图")) {
             String tag = content.substring("看看涩图".length()).trim();
+            
+            // 只有在不带标签时才使用指定的三个API
+            String[] nsfwApis;
+            if (tag.isEmpty()) {
+                // 不带标签时使用您指定的三个API
+                nsfwApis = new String[] {
+                    "https://api.lolicon.app/setu/v2?r18=1&aiType=1",
+                    "https://api.mossia.top/duckMo?aiType=1&r18Type=1",
+                    "https://sex.nyan.run/api/v2/?r18=true"
+                };
+            } else {
+                // 带标签时使用原来的API（如果需要的话）
+                nsfwApis = new String[] {
+                    "https://api.lolicon.app/setu/v2?r18=1&aiType=1&tag=",
+                    "https://api.mossia.top/duckMo?aiType=1&r18Type=1&tag=",
+                    "https://sex.nyan.run/api/v2/?r18=true&tag="
+                };
+            }
+            
             String apiUrl = null;
             String imageUrl = null;
             boolean apiSuccess = false;
 
-            // 涩图API列表
-            String[] nsfwApis = {
-                    "https://api.lolicon.app/setu/v2?r18=1&aiType=1&tag=",
-                    "https://api.mossia.top/duckMo?aiType=1&r18Type=1&tag=",
-                    "https://sex.nyan.run/api/v2/?r18=true&tag="
-            };
-
             // 遍历API直到成功
             for (int i = 0; i < nsfwApis.length; i++) {
                 try {
-                    apiUrl = tag.isEmpty() ? nsfwApis[i] : nsfwApis[i] + java.net.URLEncoder.encode(tag, "UTF-8");
+                    // 根据是否有标签来构建URL
+                    if (tag.isEmpty()) {
+                        apiUrl = nsfwApis[i];
+                    } else {
+                        apiUrl = nsfwApis[i] + java.net.URLEncoder.encode(tag, "UTF-8");
+                    }
+                    
                     String response = httpGet(apiUrl, msg);
                     if (response == null || response.isEmpty()) continue;
 
@@ -404,7 +426,7 @@ void handleNSFWRequest(String content, Object msg) {
                     finalImagePath = flippedPath;
                 } else {
                     toast("图片翻转失败，将发送原始图片");
-}
+                }
             }
 
             // 主线程发送图片
@@ -433,7 +455,7 @@ void handleNSFWRequest(String content, Object msg) {
                     } catch (Exception e) {
                         showError(msg, "涩图发送失败: " + e.getMessage());
                     }
-}
+                }
             });
         }
     } catch (Exception e) {
@@ -498,10 +520,28 @@ void handleTaggedRequest(String content, Object msg) {
         String imageUrl = null;
         boolean apiSuccess = false;
 
-        // 遍历API直到成功
+        // 创建随机数生成器
+        java.util.Random random = new java.util.Random();
+        
+        // 创建API索引数组并随机打乱
+        Integer[] apiIndices = new Integer[taggedApis.length];
         for (int i = 0; i < taggedApis.length; i++) {
+            apiIndices[i] = i;
+        }
+        
+        // 随机打乱API索引数组
+        for (int i = 0; i < apiIndices.length; i++) {
+            int randomIndex = random.nextInt(apiIndices.length);
+            Integer temp = apiIndices[i];
+            apiIndices[i] = apiIndices[randomIndex];
+            apiIndices[randomIndex] = temp;
+        }
+
+        // 按随机顺序遍历API直到成功
+        for (int i = 0; i < apiIndices.length; i++) {
+            int index = apiIndices[i];
             try {
-                apiUrl = taggedApis[i] + java.net.URLEncoder.encode(tag, "UTF-8");
+                apiUrl = taggedApis[index] + java.net.URLEncoder.encode(tag, "UTF-8");
                 String response = httpGet(apiUrl, msg);
                 if (response == null || response.isEmpty()) continue;
 
