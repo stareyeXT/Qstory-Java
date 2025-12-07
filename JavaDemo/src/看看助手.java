@@ -13,9 +13,6 @@ String FlipImageKey = "FlipImageEnabled"; // 图片翻转开关
 String NSFWEnabledPrefix = "NSFWEnabled_"; // 涩图功能开关前缀（按聊天窗口独立）
 String helpMessage = "【猫猫看腿助手使用说明】\n"
         + "1. 支持多种触发词：\n"
-        + "  - 看看腿：随机美腿图片\n"
-        + "  - 看看白丝：白丝主题视频\n"
-        + "  - 看看黑丝：黑丝主题视频\n"
         + "  - 看看猫猫：可爱猫咪\n"
         + "  - 看看jk：JK制服图片\n"
         + "  - 看看cos：COSPLAY角色扮演图片\n"
@@ -34,9 +31,6 @@ java.util.Map apiMap = new java.util.HashMap();
 
 // API映射（修正转义，移除多余反斜杠）
 {
-    apiMap.put("看看腿", "https://api.jkyai.top/API/sjmtzs.php");
-    apiMap.put("看看白丝", "https://api.jkyai.top/API/jxbssp.php");
-    apiMap.put("看看黑丝", "https://api.jkyai.top/API/jxhssp.php");
     apiMap.put("看看猫猫", "https://edgecats.net/");
     apiMap.put("看看jk", "https://api.yujn.cn/api/jk.php");
     apiMap.put("看看cos", "https://api.tangdouz.com/hlxmt.php");
@@ -141,6 +135,13 @@ String downloadMedia(String apiUrl, Object msg) {
         conn.setRequestMethod("GET");
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(15000);
+        
+        // 添加请求头来避免403错误
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
+        conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
+        conn.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3");
+        conn.setRequestProperty("Accept-Encoding", "gzip, deflate");
+        conn.setRequestProperty("Connection", "keep-alive");
 
         // 处理重定向
         int responseCode = conn.getResponseCode();
@@ -224,6 +225,13 @@ String httpGet(String urlStr, Object msg) {
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(15000);
         conn.setInstanceFollowRedirects(true);
+        
+        // 添加请求头来避免403错误
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
+        conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
+        conn.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3");
+        conn.setRequestProperty("Accept-Encoding", "gzip, deflate");
+        conn.setRequestProperty("Connection", "keep-alive");
 
         int responseCode = conn.getResponseCode();
         if (responseCode != java.net.HttpURLConnection.HTTP_OK) {
@@ -546,19 +554,14 @@ void handleTaggedRequest(String content, Object msg) {
                 if (response == null || response.isEmpty()) continue;
 
                 // 解析响应
-                if (apiUrl.contains("lolicon")) {
-                    org.json.JSONObject json = new org.json.JSONObject(response);
-                    if (!json.optString("error", "").isEmpty()) continue;
-                    org.json.JSONArray dataArray = json.getJSONArray("data");
-                    if (dataArray.length() == 0) continue;
-                    imageUrl = dataArray.getJSONObject(0).getJSONObject("urls").getString("original");
-                } else if (apiUrl.contains("sex.nyan.run")) {
-                    org.json.JSONObject json = new org.json.JSONObject(response);
-                    if (!json.optBoolean("success", false)) continue;
-                    org.json.JSONArray dataArray = json.getJSONArray("data");
-                    if (dataArray.length() == 0) continue;
-                    imageUrl = dataArray.getJSONObject(0).getString("url");
-                }
+                org.json.JSONObject json = new org.json.JSONObject(response);
+                if (!json.optString("error", "").isEmpty()) continue;
+                
+                org.json.JSONArray dataArray = json.getJSONArray("data");
+                if (dataArray.length() == 0) continue;
+                
+                org.json.JSONObject firstData = dataArray.getJSONObject(0);
+                imageUrl = firstData.getJSONObject("urls").getString("original");
                 apiSuccess = true;
                 break;
             } catch (Exception e) {
@@ -574,10 +577,11 @@ void handleTaggedRequest(String content, Object msg) {
         // 下载并发送图片
         String localPath = downloadMedia(imageUrl, msg);
         if (localPath == null) {
-            showError(msg, "图片下载失败");
+            showError(msg, "标签图片下载失败");
             return;
         }
 
+        // 主线程发送图片
         android.os.Handler mainHandler = new android.os.Handler(context.getMainLooper());
         mainHandler.post(new Runnable() {
             public void run() {
@@ -587,6 +591,7 @@ void handleTaggedRequest(String content, Object msg) {
                     } else {
                         sendPic("", ((Object)msg).PeerUin, localPath);
                     }
+
                     // 1分钟后删除缓存
                     android.os.Handler handler = new android.os.Handler();
                     handler.postDelayed(new Runnable() {
@@ -595,12 +600,12 @@ void handleTaggedRequest(String content, Object msg) {
                         }
                     }, 60000);
                 } catch (Exception e) {
-                    showError(msg, "图片发送失败: " + e.getMessage());
+                    showError(msg, "标签图片发送失败: " + e.getMessage());
                 }
             }
         });
     } catch (Exception e) {
-        showError(msg, "处理请求出错: " + e.getMessage());
+        showError(msg, "处理标签图片请求出错: " + e.getMessage());
     }
 }
 
@@ -651,10 +656,11 @@ void handleAuthorRequest(String content, Object msg) {
                     // 下载并发送图片
                     String localPath = downloadMedia(imageUrl, msg);
                     if (localPath == null) {
-                        showError(msg, "图片下载失败");
+                        showError(msg, "作者图片下载失败");
                         return;
                     }
 
+                    // 主线程发送图片
                     android.os.Handler mainHandler = new android.os.Handler(context.getMainLooper());
                     mainHandler.post(new Runnable() {
                         public void run() {
@@ -664,6 +670,7 @@ void handleAuthorRequest(String content, Object msg) {
                                 } else {
                                     sendPic("", ((Object)msg).PeerUin, localPath);
                                 }
+
                                 // 1分钟后删除缓存
                                 android.os.Handler handler = new android.os.Handler();
                                 handler.postDelayed(new Runnable() {
@@ -672,7 +679,7 @@ void handleAuthorRequest(String content, Object msg) {
                                     }
                                 }, 60000);
                             } catch (Exception e) {
-                                showError(msg, "图片发送失败: " + e.getMessage());
+                                showError(msg, "作者图片发送失败: " + e.getMessage());
                             }
                         }
                     });
@@ -728,16 +735,11 @@ void onMsg(Object msg) {
                 public void run() {
                     try {
                         String response = httpGet(apiUrl, msg);
-                        if (response == null || response.isEmpty() || response.equals("\"\"")) {
+                        if (response == null || response.isEmpty()) {
                             showError(msg, "COS图片获取失败");
                             return;
                         }
-                        android.os.Handler mainHandler = new android.os.Handler(context.getMainLooper());
-                        mainHandler.post(new Runnable() {
-                            public void run() {
-                                handleCosApiResponse(response, msg);
-                            }
-                        });
+                        handleCosApiResponse(response, msg);
                     } catch (Exception e) {
                         showError(msg, "获取COS图片失败: " + e.getMessage());
                     }
@@ -781,37 +783,27 @@ void onMsg(Object msg) {
                                     return;
                                 }
 
-                                // 获取第一张图片的URL
                                 org.json.JSONObject firstData = dataArray.getJSONObject(0);
                                 org.json.JSONArray urlsList = firstData.getJSONArray("urlsList");
                                 if (urlsList.length() == 0) {
                                     showError(msg, "未找到图片URL");
                                     return;
                                 }
-
-                                org.json.JSONObject urlObj = urlsList.getJSONObject(0);
-                                imageUrl = urlObj.getString("url");
+                                imageUrl = urlsList.getJSONObject(0).getString("url");
                             } catch (Exception e) {
-                                showError(msg, "解析API响应失败: " + e.getMessage());
+                                showError(msg, "解析二次元图片响应失败: " + e.getMessage());
                                 return;
                             }
-                        } else if (selectedApi.equals("https://random-api.czl.net/pic/ecy")) {
-                            // 对于这个API，响应本身就是图片URL，不需要额外处理
-                            // 直接使用response作为imageUrl即可
                         }
 
-                        // 处理为图片URL
-                        if (!imageUrl.startsWith("http")) {
-                            showError(msg, "无效的二次元图片URL");
-                            return;
-                        }
-
+                        // 下载并发送图片
                         String localPath = downloadMedia(imageUrl, msg);
                         if (localPath == null) {
                             showError(msg, "二次元图片下载失败");
                             return;
                         }
 
+                        // 主线程发送图片
                         android.os.Handler mainHandler = new android.os.Handler(context.getMainLooper());
                         mainHandler.post(new Runnable() {
                             public void run() {
@@ -821,6 +813,8 @@ void onMsg(Object msg) {
                                     } else {
                                         sendPic("", ((Object)msg).PeerUin, localPath);
                                     }
+
+                                    // 1分钟后删除缓存
                                     android.os.Handler handler = new android.os.Handler();
                                     handler.postDelayed(new Runnable() {
                                         public void run() {
@@ -829,12 +823,11 @@ void onMsg(Object msg) {
                                     }, 60000);
                                 } catch (Exception e) {
                                     showError(msg, "二次元图片发送失败: " + e.getMessage());
-                                    deleteFile(localPath);
                                 }
                             }
                         });
                     } catch (Exception e) {
-                        showError(msg, "处理二次元图片失败: " + e.getMessage());
+                        showError(msg, "获取二次元图片失败: " + e.getMessage());
                     }
                 }
             }).start();
@@ -858,33 +851,26 @@ void onMsg(Object msg) {
                         mainHandler.post(new Runnable() {
                             public void run() {
                                 try {
-                                    // 区分群聊/私聊发送视频
                                     if (((Object)msg).IsGroup) {
                                         sendVideo(((Object)msg).GroupUin, "", localPath);
                                     } else {
                                         sendVideo("", ((Object)msg).PeerUin, localPath);
                                     }
 
-                                    // 1分钟后删除缓存（5分钟后再次尝试）
+                                    // 1分钟后删除缓存
                                     android.os.Handler handler = new android.os.Handler();
                                     handler.postDelayed(new Runnable() {
                                         public void run() {
                                             deleteFile(localPath);
                                         }
                                     }, 60000);
-                                    handler.postDelayed(new Runnable() {
-                                        public void run() {
-                                            deleteFile(localPath);
-                                        }
-                                    }, 300000);
                                 } catch (Exception e) {
                                     showError(msg, content + " 视频发送失败: " + e.getMessage());
-                                    deleteFile(localPath);
                                 }
                             }
                         });
                     } catch (Exception e) {
-                        showError(msg, content + " 视频下载失败: " + e.getMessage());
+                        showError(msg, content + " 视频处理失败: " + e.getMessage());
                     }
                 }
             }).start();
@@ -899,6 +885,7 @@ void onMsg(Object msg) {
                             return;
                         }
 
+                        // 主线程发送图片
                         android.os.Handler mainHandler = new android.os.Handler(context.getMainLooper());
                         mainHandler.post(new Runnable() {
                             public void run() {
@@ -909,31 +896,26 @@ void onMsg(Object msg) {
                                         sendPic("", ((Object)msg).PeerUin, localPath);
                                     }
 
-                                    // 1分钟后删除缓存（5分钟后再次尝试）
+                                    // 1分钟后删除缓存
                                     android.os.Handler handler = new android.os.Handler();
                                     handler.postDelayed(new Runnable() {
                                         public void run() {
                                             deleteFile(localPath);
                                         }
                                     }, 60000);
-                                    handler.postDelayed(new Runnable() {
-                                        public void run() {
-                                            deleteFile(localPath);
-                                        }
-                                    }, 300000);
                                 } catch (Exception e) {
                                     showError(msg, content + " 图片发送失败: " + e.getMessage());
                                 }
                             }
                         });
                     } catch (Exception e) {
-                        showError(msg, content + " 图片下载失败: " + e.getMessage());
+                        showError(msg, content + " 图片处理失败: " + e.getMessage());
                     }
                 }
             }).start();
         }
     } catch (Exception e) {
-        showError(msg, "处理消息出错: " + e.getMessage());
+        showError(msg, "消息处理异常: " + e.getMessage());
     }
 }
 
